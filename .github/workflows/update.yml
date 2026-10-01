@@ -1,0 +1,230 @@
+name: Update IPTV Mirror
+
+on:
+  workflow_dispatch:
+  schedule:
+    # GitHub Actions cron is UTC.
+    # Run once every 24 hours and avoid exact-hour congestion.
+    - cron: "17 0 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-radio-clash
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_BASE: "https://guovin.github.io/iptv-api"
+  GH_PROXY_PREFIX: "https://ghproxy.net/"
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download upstream batch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf .tmp
+          mkdir -p .tmp
+
+          download() {
+            local name="$1"
+
+            echo "Downloading ${name} ..."
+
+            curl \
+              --fail \
+              --location \
+              --silent \
+              --show-error \
+              --retry 5 \
+              --retry-delay 5 \
+              --retry-all-errors \
+              --connect-timeout 20 \
+              --max-time 180 \
+              "${UPSTREAM_BASE}/${name}" \
+              --output ".tmp/${name}"
+          }
+
+          download result.m3u
+          download result.txt
+          download ipv4.m3u
+          download ipv4.txt
+          download epg.gz
+
+      - name: Validate downloaded batch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          reject_html_or_error_page() {
+            local file="$1"
+
+            if grep -aEqi \
+              '<html|<!doctype html|rate limit|access denied|forbidden|bad gateway|service unavailable' \
+              "$file"; then
+              echo "${file} appears to contain an HTML/error response."
+              exit 1
+            fi
+          }
+
+          validate_m3u() {
+            local file="$1"
+
+            test -s "$file"
+
+            # Reject unexpectedly tiny placeholder/error files.
+            test "$(wc -c < "$file")" -gt 1024
+
+            # Basic M3U structure.
+            head -n 1 "$file" | grep -q '^#EXTM3U'
+            grep -q '^#EXTINF:' "$file"
+
+            reject_html_or_error_page "$file"
+          }
+
+          validate_txt() {
+            local file="$1"
+
+            test -s "$file"
+            test "$(wc -c < "$file")" -gt 1024
+
+            # Playlist should contain at least one network stream URL.
+            grep -aEq 'https?://|rtmp://|rtsp://|udp://|rtp://' "$file"
+
+            reject_html_or_error_page "$file"
+          }
+
+          validate_m3u .tmp/result.m3u
+          validate_m3u .tmp/ipv4.m3u
+
+          validate_txt .tmp/result.txt
+          validate_txt .tmp/ipv4.txt
+
+          test -s .tmp/epg.gz
+
+          # Must be a valid gzip file.
+          gzip -t .tmp/epg.gz
+
+      - name: Rewrite EPG URLs in M3U files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export MIRROR_EPG_URL="${GH_PROXY_PREFIX}https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/epg.gz"
+
+          python3 <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          mirror_epg = os.environ["MIRROR_EPG_URL"]
+
+          targets = [
+              Path(".tmp/result.m3u"),
+              Path(".tmp/ipv4.m3u"),
+          ]
+
+          patterns = [
+              r"https?://guovin\.github\.io/iptv-api/epg\.gz",
+          ]
+
+          for path in targets:
+              text = path.read_text(encoding="utf-8-sig")
+              before = text
+
+              for pattern in patterns:
+                  text = re.sub(pattern, mirror_epg, text)
+
+              if re.search(
+                  r"https?://guovin\.github\.io/iptv-api/epg\.gz",
+                  text,
+              ):
+                  raise SystemExit(
+                      f"Upstream GitHub Pages EPG URL remains in {path}"
+                  )
+
+              path.write_text(
+                  text,
+                  encoding="utf-8",
+                  newline="\n",
+              )
+
+              if before != text:
+                  print(f"{path}: EPG URL rewritten to {mirror_epg}")
+              else:
+                  print(
+                      f"{path}: no exact upstream EPG URL found; "
+                      "continuing because the M3U may use a different header."
+                  )
+          PY
+
+      - name: Validate rewritten batch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for file in .tmp/result.m3u .tmp/ipv4.m3u; do
+            test -s "$file"
+            head -n 1 "$file" | grep -q '^#EXTM3U'
+            grep -q '^#EXTINF:' "$file"
+
+            if grep -Eq \
+              'https?://guovin\.github\.io/iptv-api/epg\.gz' \
+              "$file"; then
+              echo "Upstream Pages EPG URL remains in ${file}."
+              exit 1
+            fi
+          done
+
+          test -s .tmp/result.txt
+          test -s .tmp/ipv4.txt
+          gzip -t .tmp/epg.gz
+
+      - name: Install validated batch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Only replace the live repository files after the complete batch
+          # has downloaded and validated successfully.
+
+          mv .tmp/result.m3u ./result.m3u
+          mv .tmp/result.txt ./result.txt
+          mv .tmp/ipv4.m3u ./ipv4.m3u
+          mv .tmp/ipv4.txt ./ipv4.txt
+          mv .tmp/epg.gz ./epg.gz
+
+      - name: Commit changes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add \
+            result.m3u \
+            result.txt \
+            ipv4.m3u \
+            ipv4.txt \
+            epg.gz
+
+          if git diff --cached --quiet; then
+            echo "No upstream changes detected; nothing to commit."
+            exit 0
+          fi
+
+          git commit -m "chore: update IPTV mirror"
+          git push
