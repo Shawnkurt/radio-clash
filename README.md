@@ -13,62 +13,103 @@ Years following the track’s release date, a reviewer would [say](https://books
 ### [Verse 1]
 
 Interrupting all programmes:
+
 This is Radio Clash from pirate satellite
+
 Orbiting your living room
+
 Cashing in the Bill of Rights
+
 Cuban army surplus or refusing all third lights
+
 This is Radio Clash on pirate satellite, yeah
 
 Let's get it!
 
 This sound does not subscribe
+
 To the international plan
+
 In the psycho shadow of the white right hand
+
 Then that see ghettology as an urban Vietnam
+
 Giving deadly exhibitions of murder by napalm
+
 
 ### [Chorus]
 
 This is Radio Clash tearing up the seven veils
+
 This is Radio Clash please save us, not the whales
+
 This is Radio Clash underneath a mushroom cloud
+
 This is Radio Clash
+
 You don't need that funeral shroud
 
 ### [Verse 2]
 
 Forces have been looting
+
 My humanity
+
 Curfews have been curbing
+
 The end of liberty (Yeah)
+
 Hands of law have sorted through
+
 My identity
+
 But now this sound is brave
+
 And wants to be free (Anyway to be free)
+
 You might also like
+
 Straight to Hell
+
 The Clash
+
 Clash City Rockers (Single Version)
+
 The Clash
+
 Stop the World
+
 The Clash
 
 ### [Chorus]
 
 This is Radio Clash on pirate satellite
+
 This is not free Europe
+
 Not an armed force network
+
 This is Radio Clash using audio ammunition
+
 This is Radio Clash can we get that world to listen?
+
 This is Radio Clash using aural ammunition
+
 This is Radio Clash can we get that world to listen?
+
 This is Radio Clash on pirate Satelliten (This is Radio Clash)
+
 Orbiting your living room (This is Radio Clash)
+
 Cashing in the Bill of Rights (This is Radio Clash)
+
 This is Radio Clash on pirate satellite
+
 This is Radio Clash everybody hold on tight!
+
 
 ### [Outro]
 
 A-riggy diggy dig dang dang
+
 Go back to urban 'Nam
