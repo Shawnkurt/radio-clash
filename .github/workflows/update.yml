@@ -19,7 +19,7 @@ env:
   # Guovin no longer publishes epg.gz (EPG sources count is 0), so the EPG
   # programme guide is mirrored from suzukua/epg instead.
   EPG_SOURCE_URL: "https://epg.zsdc.eu.org/t.xml.gz"
-  GH_PROXY_PREFIX: "https://ghproxy.net/"
+  GH_PROXY_PREFIX: "https://ghfast.top/"
 
 jobs:
   update:
@@ -137,15 +137,68 @@ jobs:
           # would fail with SIGPIPE under pipefail.)
           zcat .tmp/epg.gz > .tmp/epg.xml
 
-          grep -q '<tv' .tmp/epg.xml
-          grep -q '<channel' .tmp/epg.xml
-          grep -q '<programme' .tmp/epg.xml
+          # Reuse the same structural checks before and after adaptation.
+          cat > .tmp/validate_batch.py <<'PY'
+          import gzip
+          import os
+          import re
+          import sys
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
 
-          if head -c 4096 .tmp/epg.xml | grep -aqi \
-            '<!doctype html\|<html'; then
-            echo "epg.gz appears to contain an HTML response."
-            exit 1
-          fi
+          rewritten = "--rewritten" in sys.argv
+          mirror_epg = (
+              os.environ["GH_PROXY_PREFIX"]
+              + "https://raw.githubusercontent.com/"
+              + os.environ["GITHUB_REPOSITORY"]
+              + "/main/lyrics/epg.gz"
+          )
+          stream_url = re.compile(r"^(?:https?|rtmp|rtsp|udp|rtp)://\S+$")
+          epg_attribute = re.compile(r'(?:x-tvg-url|url-tvg)="([^"]*)"')
+
+          for name in ("result.m3u", "ipv4.m3u"):
+              path = Path(".tmp") / name
+              lines = path.read_text(encoding="utf-8-sig").splitlines()
+              if not lines or not re.match(r"^#EXTM3U(?:\s|$)", lines[0]):
+                  raise SystemExit(f"{path}: invalid M3U header")
+              pending = False
+              entries = 0
+              for line in lines[1:]:
+                  line = line.strip()
+                  if line.startswith("#EXTINF:"):
+                      if pending:
+                          raise SystemExit(f"{path}: channel has no stream URL")
+                      pending = True
+                  elif line and not line.startswith("#"):
+                      if not pending or not stream_url.fullmatch(line):
+                          raise SystemExit(f"{path}: invalid or unpaired stream URL")
+                      pending = False
+                      entries += 1
+              if pending or not entries:
+                  raise SystemExit(f"{path}: missing stream URL or empty playlist")
+              if rewritten:
+                  urls = epg_attribute.findall(lines[0])
+                  if not urls or any(url != mirror_epg for url in urls):
+                      raise SystemExit(f"{path}: incorrect mirror EPG URL")
+
+          with gzip.open(".tmp/epg.gz", "rb") as handle:
+              root = ET.parse(handle).getroot()
+          channels = root.findall("channel")
+          programmes = root.findall("programme")
+          if root.tag != "tv" or not channels or not programmes:
+              raise SystemExit("EPG must have a tv root, channels and programmes")
+          ids = [channel.get("id") for channel in channels]
+          if any(not channel_id or not channel_id.strip() for channel_id in ids):
+              raise SystemExit("EPG contains an empty channel id")
+          if rewritten and len(ids) != len(set(ids)):
+              raise SystemExit("Adapted EPG contains duplicate channel ids")
+          known_ids = set(ids)
+          if any(p.get("channel") not in known_ids for p in programmes):
+              raise SystemExit("EPG programme references an unknown channel")
+          print("Playlist structure and XMLTV references validated")
+          PY
+
+          python3 .tmp/validate_batch.py
 
       - name: Rewrite EPG URLs in M3U files
         shell: bash
@@ -166,38 +219,24 @@ jobs:
               Path(".tmp/ipv4.m3u"),
           ]
 
-          patterns = [
-              r"https?://guovin\.github\.io/iptv-api/epg\.gz",
-          ]
-
           for path in targets:
-              text = path.read_text(encoding="utf-8-sig")
-              before = text
-
-              for pattern in patterns:
-                  text = re.sub(pattern, mirror_epg, text)
-
-              if re.search(
-                  r"https?://guovin\.github\.io/iptv-api/epg\.gz",
-                  text,
-              ):
-                  raise SystemExit(
-                      f"Upstream GitHub Pages EPG URL remains in {path}"
+              # Only change EPG attributes on the header. Preserve every
+              # subsequent byte, including stream URLs and line endings.
+              text = path.read_bytes().decode("utf-8-sig")
+              lines = text.splitlines(keepends=True)
+              header = lines[0].rstrip("\r\n")
+              ending = lines[0][len(header):]
+              attribute = re.compile(r'(?:x-tvg-url|url-tvg)="[^"]*"')
+              if attribute.search(header):
+                  header = attribute.sub(
+                      lambda match: match.group(0).split("=", 1)[0]
+                      + f'="{mirror_epg}"', header
                   )
-
-              path.write_text(
-                  text,
-                  encoding="utf-8",
-                  newline="\n",
-              )
-
-              if before != text:
-                  print(f"{path}: EPG URL rewritten to {mirror_epg}")
               else:
-                  print(
-                      f"{path}: no exact upstream EPG URL found; "
-                      "continuing because the M3U may use a different header."
-                  )
+                  header += f' x-tvg-url="{mirror_epg}"'
+              lines[0] = header + ending
+              path.write_bytes("".join(lines).encode("utf-8"))
+              print(f"{path}: EPG header set to {mirror_epg}")
           PY
 
       - name: Adapt EPG channels to playlist naming
@@ -356,22 +395,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          for file in .tmp/result.m3u .tmp/ipv4.m3u; do
-            test -s "$file"
-            head -n 1 "$file" | grep -q '^#EXTM3U'
-            grep -q '^#EXTINF:' "$file"
-
-            if grep -Eq \
-              'https?://guovin\.github\.io/iptv-api/epg\.gz' \
-              "$file"; then
-              echo "Upstream Pages EPG URL remains in ${file}."
-              exit 1
-            fi
-          done
-
           test -s .tmp/result.txt
           test -s .tmp/ipv4.txt
           gzip -t .tmp/epg.gz
+          python3 .tmp/validate_batch.py --rewritten
 
       - name: Install validated batch
         shell: bash
