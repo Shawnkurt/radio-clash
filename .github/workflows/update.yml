@@ -1,4 +1,4 @@
-name: Update IPTV Mirror
+name: Update Lyrics
 
 on:
   workflow_dispatch:
@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: update-radio-clash
+  group: update-lyrics
   cancel-in-progress: false
 
 env:
@@ -152,7 +152,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          export MIRROR_EPG_URL="${GH_PROXY_PREFIX}https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/epg.gz"
+          export MIRROR_EPG_URL="${GH_PROXY_PREFIX}https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/lyrics/epg.gz"
 
           python3 <<'PY'
           import os
@@ -381,11 +381,13 @@ jobs:
           # Only replace the live repository files after the complete batch
           # has downloaded and validated successfully.
 
-          mv .tmp/result.m3u ./result.m3u
-          mv .tmp/result.txt ./result.txt
-          mv .tmp/ipv4.m3u ./ipv4.m3u
-          mv .tmp/ipv4.txt ./ipv4.txt
-          mv .tmp/epg.gz ./epg.gz
+          mkdir -p lyrics
+
+          mv .tmp/result.m3u ./lyrics/result.m3u
+          mv .tmp/result.txt ./lyrics/result.txt
+          mv .tmp/ipv4.m3u ./lyrics/ipv4.m3u
+          mv .tmp/ipv4.txt ./lyrics/ipv4.txt
+          mv .tmp/epg.gz ./lyrics/epg.gz
 
       - name: Commit changes
         shell: bash
@@ -397,16 +399,16 @@ jobs:
             "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add \
-            result.m3u \
-            result.txt \
-            ipv4.m3u \
-            ipv4.txt \
-            epg.gz
+            lyrics/result.m3u \
+            lyrics/result.txt \
+            lyrics/ipv4.m3u \
+            lyrics/ipv4.txt \
+            lyrics/epg.gz
 
           if git diff --cached --quiet; then
             echo "No upstream changes detected; nothing to commit."
             exit 0
           fi
 
-          git commit -m "chore: update IPTV mirror"
+          git commit -m "chore: update lyrics"
           git push
