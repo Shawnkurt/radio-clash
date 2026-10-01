@@ -132,12 +132,16 @@ jobs:
           # Must be a valid gzip file.
           gzip -t .tmp/epg.gz
 
-          # Must decompress to an XMLTV document with channel data.
-          zcat .tmp/epg.gz | grep -q '<tv'
-          zcat .tmp/epg.gz | grep -q '<channel'
-          zcat .tmp/epg.gz | grep -q '<programme'
+          # Decompress once, then check the XMLTV content.
+          # (Do not pipe zcat into grep -q: grep -q exits early and zcat
+          # would fail with SIGPIPE under pipefail.)
+          zcat .tmp/epg.gz > .tmp/epg.xml
 
-          if zcat .tmp/epg.gz | head -c 4096 | grep -aqi \
+          grep -q '<tv' .tmp/epg.xml
+          grep -q '<channel' .tmp/epg.xml
+          grep -q '<programme' .tmp/epg.xml
+
+          if head -c 4096 .tmp/epg.xml | grep -aqi \
             '<!doctype html\|<html'; then
             echo "epg.gz appears to contain an HTML response."
             exit 1
