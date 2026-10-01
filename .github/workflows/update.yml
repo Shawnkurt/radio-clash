@@ -200,6 +200,157 @@ jobs:
                   )
           PY
 
+      - name: Adapt EPG channels to playlist naming
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Rewrite EPG channel ids and display-names so they match the
+          # naming used by result.m3u / ipv4.m3u (tvg-id) and result.txt /
+          # ipv4.txt (channel name). Only exact and normalized
+          # (case/whitespace/hyphen-insensitive) matches are used.
+          # The playlist files themselves are never modified here.
+
+          python3 <<'PY'
+          import gzip
+          import re
+          import xml.etree.ElementTree as ET
+          from collections import defaultdict
+          from pathlib import Path
+
+          NORM_STRIP = re.compile(r"[\s\-_·・]")
+
+          def norm(value):
+              return NORM_STRIP.sub("", value or "").upper()
+
+          # ---- Collect naming used by the mirrored playlists ----
+
+          tvg_ids = set()
+          names = set()
+          tvg_id_re = re.compile(r'tvg-id="([^"]*)"')
+          tvg_name_re = re.compile(r'tvg-name="([^"]*)"')
+
+          for path in (".tmp/result.m3u", ".tmp/ipv4.m3u"):
+              for line in Path(path).read_text(encoding="utf-8").splitlines():
+                  if not line.startswith("#EXTINF"):
+                      continue
+                  match = tvg_id_re.search(line)
+                  if match and match.group(1):
+                      tvg_ids.add(match.group(1))
+                  match = tvg_name_re.search(line)
+                  if match and match.group(1):
+                      names.add(match.group(1))
+                  display = line.rsplit(",", 1)[-1].strip()
+                  if display:
+                      names.add(display)
+
+          for path in (".tmp/result.txt", ".tmp/ipv4.txt"):
+              for line in Path(path).read_text(encoding="utf-8").splitlines():
+                  line = line.strip()
+                  if not line or "#genre#" in line:
+                      continue
+                  channel_name = line.split(",", 1)[0].strip()
+                  if channel_name:
+                      names.add(channel_name)
+
+          norm_to_tvg_id = defaultdict(set)
+          for tid in tvg_ids:
+              norm_to_tvg_id[norm(tid)].add(tid)
+          norm_to_names = defaultdict(set)
+          for name in names:
+              norm_to_names[norm(name)].add(name)
+
+          # ---- Adapt the EPG ----
+
+          tree = ET.parse(".tmp/epg.xml")
+          root = tree.getroot()
+
+          id_map = {}
+          merged_display = {}
+          exact = 0
+          renamed = 0
+          aliases_added = 0
+
+          for channel in root.findall("channel"):
+              old_id = channel.get("id") or ""
+              if old_id in tvg_ids:
+                  final_id = old_id
+                  exact += 1
+              else:
+                  candidates = norm_to_tvg_id.get(norm(old_id))
+                  if candidates and len(candidates) == 1:
+                      final_id = next(iter(candidates))
+                      renamed += 1
+                  else:
+                      final_id = old_id
+              id_map[old_id] = final_id
+
+              display_list = merged_display.setdefault(final_id, [])
+              for text in [e.text for e in channel.findall("display-name")]:
+                  if text and text not in display_list:
+                      display_list.append(text)
+              for alias in sorted(norm_to_names.get(norm(old_id), ())):
+                  if alias not in display_list:
+                      display_list.append(alias)
+                      aliases_added += 1
+
+          # Rewrite kept channel elements, merge duplicates.
+          seen = set()
+          merged = 0
+          for channel in list(root.findall("channel")):
+              old_id = channel.get("id") or ""
+              final_id = id_map[old_id]
+              if final_id in seen:
+                  root.remove(channel)
+                  merged += 1
+                  continue
+              seen.add(final_id)
+              channel.set("id", final_id)
+              for element in channel.findall("display-name"):
+                  channel.remove(element)
+              for text in merged_display[final_id]:
+                  element = ET.SubElement(channel, "display-name")
+                  element.set("lang", "zh")
+                  element.text = text
+
+          programmes_renamed = 0
+          for programme in root.findall("programme"):
+              old_channel = programme.get("channel")
+              if old_channel in id_map and id_map[old_channel] != old_channel:
+                  programme.set("channel", id_map[old_channel])
+                  programmes_renamed += 1
+
+          total = len(root.findall("channel"))
+          matched = sum(
+              1 for c in root.findall("channel") if c.get("id") in tvg_ids
+          )
+          print(f"EPG adaptation: {total} channels (after merge)")
+          print(f"  exact id match:      {exact}")
+          print(f"  normalized rename:   {renamed}")
+          print(f"  duplicates merged:   {merged}")
+          print(f"  alias names added:   {aliases_added}")
+          print(f"  programmes remapped: {programmes_renamed}")
+          print(
+              f"  channels matching playlist tvg-id: "
+              f"{matched}/{total}"
+          )
+
+          # mtime=0 keeps the gzip output deterministic so unchanged
+          # EPG content does not produce new commits.
+          xml_bytes = ET.tostring(
+              root, encoding="utf-8", xml_declaration=True
+          )
+          Path(".tmp/epg.xml").write_bytes(xml_bytes)
+          Path(".tmp/epg.gz").write_bytes(
+              gzip.compress(xml_bytes, 9, mtime=0)
+          )
+
+          # Round-trip check: re-parse and verify the gzip payload.
+          ET.parse(".tmp/epg.xml")
+          with gzip.open(".tmp/epg.gz", "rb") as handle:
+              assert handle.read() == xml_bytes
+          PY
+
       - name: Validate rewritten batch
         shell: bash
         run: |
