@@ -16,6 +16,9 @@ concurrency:
 
 env:
   UPSTREAM_BASE: "https://guovin.github.io/iptv-api"
+  # Guovin no longer publishes epg.gz (EPG sources count is 0), so the EPG
+  # programme guide is mirrored from suzukua/epg instead.
+  EPG_SOURCE_URL: "https://epg.zsdc.eu.org/t.xml.gz"
   GH_PROXY_PREFIX: "https://ghproxy.net/"
 
 jobs:
@@ -60,7 +63,20 @@ jobs:
           download result.txt
           download ipv4.m3u
           download ipv4.txt
-          download epg.gz
+
+          echo "Downloading epg.gz (from ${EPG_SOURCE_URL}) ..."
+          curl \
+            --fail \
+            --location \
+            --silent \
+            --show-error \
+            --retry 5 \
+            --retry-delay 5 \
+            --retry-all-errors \
+            --connect-timeout 20 \
+            --max-time 180 \
+            "${EPG_SOURCE_URL}" \
+            --output ".tmp/epg.gz"
 
       - name: Validate downloaded batch
         shell: bash
@@ -115,6 +131,17 @@ jobs:
 
           # Must be a valid gzip file.
           gzip -t .tmp/epg.gz
+
+          # Must decompress to an XMLTV document with channel data.
+          zcat .tmp/epg.gz | grep -q '<tv'
+          zcat .tmp/epg.gz | grep -q '<channel'
+          zcat .tmp/epg.gz | grep -q '<programme'
+
+          if zcat .tmp/epg.gz | head -c 4096 | grep -aqi \
+            '<!doctype html\|<html'; then
+            echo "epg.gz appears to contain an HTML response."
+            exit 1
+          fi
 
       - name: Rewrite EPG URLs in M3U files
         shell: bash
