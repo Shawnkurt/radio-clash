@@ -816,7 +816,8 @@ jobs:
             exit 0
           fi
 
-          git commit -m "chore: update lyrics"
+          update_time="$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')"
+          git commit -m "chore: update lyrics (${update_time} GMT+8)"
           git push
 ```
 
